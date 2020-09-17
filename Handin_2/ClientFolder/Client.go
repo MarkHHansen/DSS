@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,13 +15,17 @@ var conn net.Conn
 
 type NetworksList struct {
 	networkMap map[string]net.Conn
-	sortedList []string
+	sortedList [11]IPList
 	mux        sync.Mutex
 }
 
 type MapOfStrings struct {
 	mapOS map[string]bool
 	mux   sync.Mutex
+}
+type IPList struct {
+	id int
+	ip string
 }
 
 type Ledger struct {
@@ -48,9 +53,27 @@ func (l *Ledger) Transaction(t *Transaction) {
 	l.Accounts[t.To] += t.Amount
 }
 
+func TransActionHandler(myledger *Ledger, transchan chan string, broadcast chan string) {
+	for {
+		transactions := <-transchan
+
+		transArray := strings.Split(transactions, ",")
+		newTrans := new(Transaction)
+		newTrans.ID = transArray[0]
+		newTrans.From = transArray[1]
+		newTrans.To = transArray[2]
+		newTrans.Amount, _ = strconv.Atoi(transArray[3])
+
+		myledger.Transaction(newTrans)
+
+		broadcast <- transactions
+	}
+}
+
 func BroadCast(inc chan string, list *NetworksList) {
 	for {
 		msg := <-inc
+
 		list.mux.Lock()
 		for _, k := range list.networkMap {
 			k.Write([]byte(msg))
@@ -59,7 +82,8 @@ func BroadCast(inc chan string, list *NetworksList) {
 	}
 }
 
-func Recieve(channels chan string, list *NetworksList, mapOfStrings *MapOfStrings, conn net.Conn) {
+func Recieve(channels chan string, list *NetworksList, tc chan string, conn net.Conn) {
+	counter := 0
 	for {
 		msg, err := bufio.NewReader(conn).ReadString('\n')
 
@@ -70,20 +94,31 @@ func Recieve(channels chan string, list *NetworksList, mapOfStrings *MapOfString
 			list.mux.Unlock()
 			break
 		}
-		mapOfStrings.mux.Lock()
-		if mapOfStrings.mapOS[msg] != true {
-			fmt.Print("Recieved String: " + string(msg))
-			channels <- msg
-			fmt.Println("String added to saved messages: " + msg)
-			fmt.Print("> ")
-			mapOfStrings.mapOS[msg] = true
-		}
-		mapOfStrings.mux.Unlock()
-	}
 
+		if msg == "IPs incoming" {
+			counter++
+		}
+		if counter > 0 {
+			ips := strings.Split(msg, ",")
+			for i := range ips {
+				list.sortedList[counter].id = i + 1
+				list.sortedList[counter].ip = ips[i+1]
+			}
+		}
+		if msg == "New peer" {
+			conn.Write([]byte("IPs incoming"))
+			IPs := ""
+			for _, k := range list.sortedList {
+				IPs += "," + k.ip
+			}
+		} else {
+			tc <- msg
+		}
+
+	}
 }
 
-func HandleConnections(InputConn net.Conn, list *NetworksList, channels chan string, mapOfStrings *MapOfStrings) {
+func HandleConnections(InputConn net.Conn, list *NetworksList, channels chan string, tc chan string) {
 	defer InputConn.Close()
 
 	for i, _ := range list.networkMap {
@@ -92,11 +127,11 @@ func HandleConnections(InputConn net.Conn, list *NetworksList, channels chan str
 		time.Sleep(1)
 	}
 
-	Recieve(channels, list, mapOfStrings, InputConn)
+	Recieve(channels, list, tc, InputConn)
 }
 
-func LookForConnection(ln net.Listener, list *NetworksList, channels chan string, mapOfStrings *MapOfStrings) {
-	defer ln.Close()
+func LookForConnection(ln net.Listener, list *NetworksList, channels chan string, tc chan string) {
+	//defer ln.Close()
 
 	go BroadCast(channels, list)
 
@@ -104,28 +139,47 @@ func LookForConnection(ln net.Listener, list *NetworksList, channels chan string
 		fmt.Println("Listening for connection...")
 		fmt.Print("> ")
 		InputConn, _ := ln.Accept()
+
 		fmt.Println("Got a connection...")
 		fmt.Print("> ")
+
 		list.mux.Lock()
-		list.networkMap[InputConn.RemoteAddr().String()] = InputConn
+		list.sortedList[1].id = 1
+		list.sortedList[1].ip = InputConn.RemoteAddr().String()
 		list.mux.Unlock()
-		go HandleConnections(InputConn, list, channels, mapOfStrings)
+
+		go HandleConnections(InputConn, list, channels, tc)
 	}
 }
 
-func SendManuallyToConnections(channels chan string, mapOfStrings *MapOfStrings) {
+func SendManuallyToConnections(tc chan string) {
 	for {
-		reader := bufio.NewReader(os.Stdin)
+		fmt.Println("Choose ID: ")
+		var idInput string
 		fmt.Print("> ")
-		text, err := reader.ReadString('\n')
-		mapOfStrings.mux.Lock()
-		mapOfStrings.mapOS[text] = true
-		mapOfStrings.mux.Unlock()
+		fmt.Scan(&idInput)
+
+		fmt.Println("Choose sender: ")
+		var senderInput string
+		fmt.Print("> ")
+		fmt.Scan(&senderInput)
+
+		fmt.Println("Choose receiver: ")
+		var receiver string
+		fmt.Print("> ")
+		fmt.Scan(&receiver)
+
+		reader := bufio.NewReader(os.Stdin)
+		fmt.Print("Choose amount \n > ")
+		amount, err := reader.ReadString('\n')
 
 		if err != nil {
 			return
 		}
-		channels <- text
+
+		trans := idInput + "," + senderInput + "," + receiver + "," + amount
+
+		tc <- trans
 	}
 
 }
@@ -133,10 +187,12 @@ func SendManuallyToConnections(channels chan string, mapOfStrings *MapOfStrings)
 func main() {
 	list := new(NetworksList)
 	list.networkMap = make(map[string]net.Conn)
-	channels := make(chan string)
+
+	broadcastchan := make(chan string)
+	transactionchan := make(chan string)
 	mapOfStrings := new(MapOfStrings)
 	mapOfStrings.mapOS = make(map[string]bool)
-	//myLedger := MakeLedger()
+	myLedger := MakeLedger()
 
 	fmt.Println("Write ip-address: ")
 	var ipInput string
@@ -148,6 +204,8 @@ func main() {
 	fmt.Print("> ")
 	fmt.Scan(&portInput)
 
+	go TransActionHandler(myLedger, transactionchan, broadcastchan)
+
 	var ipPort string
 	ipPort = ipInput + ":" + portInput
 	conn, err := net.Dial("tcp", ipPort)
@@ -157,9 +215,9 @@ func main() {
 		defer ln.Close()
 		for {
 			fmt.Println("Local Ip-Address and port number: " + "127.0.0.1:18081")
-			go LookForConnection(ln, list, channels, mapOfStrings)
+			go LookForConnection(ln, list, broadcastchan, transactionchan)
 
-			SendManuallyToConnections(channels, mapOfStrings)
+			SendManuallyToConnections(transactionchan)
 		}
 	}
 
@@ -174,11 +232,13 @@ func main() {
 	list.networkMap[conn.RemoteAddr().String()] = conn
 	list.mux.Unlock()
 
+	conn.Write([]byte("New peer"))
+
 	ln, _ := net.Listen("tcp", ":"+port)
 
-	go LookForConnection(ln, list, channels, mapOfStrings)
+	go LookForConnection(ln, list, broadcastchan, transactionchan)
 
-	go Recieve(channels, list, mapOfStrings, conn)
+	go Recieve(broadcastchan, list, transactionchan, conn)
 
-	SendManuallyToConnections(channels, mapOfStrings)
+	SendManuallyToConnections(transactionchan)
 }
