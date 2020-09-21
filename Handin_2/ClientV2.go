@@ -4,19 +4,23 @@ import (
 	"bufio"
 	"fmt"
 	"net"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 var conn net.Conn
 
+//Map over connections and a sorted list of connections
 type NetworksList struct {
 	networkMap map[string]net.Conn
 	sortedList []string
 	mux        sync.Mutex
 }
 
+//Map to make sure trancactions arent duplicated
 type MapOfTrans struct {
 	mapOT map[string]bool
 	mux   sync.Mutex
@@ -47,10 +51,17 @@ func (l *Ledger) Transaction(t *Transaction) {
 	l.Accounts[t.To] += t.Amount
 }
 
+///Håndterer indkommende strings, og opdaterer ledger med information. Søger for det kun bliver opdateret en gang
 func TransActionHandler(myledger *Ledger, transchan chan string, broadcast chan string, maptrans *MapOfTrans) {
 	for {
 
 		transactions := <-transchan
+		//Removes any unwanted spaces from the incoming message. Without this, the last part of the message, the amount, cannot be parsed to an integer.
+		re := regexp.MustCompile(`\r?\n`)
+		transactions = re.ReplaceAllString(transactions, "")
+
+		maptrans.mux.Lock()
+		//Checks if transaction has already been made, otherwise makes it
 		if maptrans.mapOT[transactions] == false {
 			transArray := strings.Split(transactions, ",")
 			if len(transArray) > 2 {
@@ -59,11 +70,10 @@ func TransActionHandler(myledger *Ledger, transchan chan string, broadcast chan 
 				newTrans.From = transArray[1]
 				newTrans.To = transArray[2]
 				tempInt := transArray[3]
-				fmt.Println(tempInt)
 
-				//newInt, err := strconv.ParseInt(tempInt, 10, 64)
-				//s := strconv.FormatInt(newInt, 10)
-				//newTrans.Amount = tempInt
+				amount, _ := strconv.Atoi(tempInt)
+
+				newTrans.Amount = amount
 
 				myledger.Transaction(newTrans)
 
@@ -72,6 +82,7 @@ func TransActionHandler(myledger *Ledger, transchan chan string, broadcast chan 
 				broadcast <- transactions
 			}
 		}
+		maptrans.mux.Unlock()
 		fmt.Println("Updated ledgder: ")
 		for i, k := range myledger.Accounts {
 			fmt.Println("Account: " + i + " has balance: " + strconv.Itoa(k))
@@ -79,6 +90,7 @@ func TransActionHandler(myledger *Ledger, transchan chan string, broadcast chan 
 	}
 }
 
+//Broadcasts to all connections
 func BroadCast(inc chan string, list *NetworksList) {
 	for {
 		msg := <-inc
@@ -91,10 +103,11 @@ func BroadCast(inc chan string, list *NetworksList) {
 	}
 }
 
+//Waits for input on port, and handles the message
 func Recieve(channels chan string, list *NetworksList, tc chan string, conn net.Conn, localIP string) {
 	for {
 		msg, err := bufio.NewReader(conn).ReadString('\n')
-
+		//Deletes connection if sessionis ended
 		if err != nil {
 			list.mux.Lock()
 			fmt.Println("Ending session with " + conn.RemoteAddr().String())
@@ -104,23 +117,30 @@ func Recieve(channels chan string, list *NetworksList, tc chan string, conn net.
 		}
 
 		ips := strings.Split(msg, ",")
-
+		//If a new peer is connected, this returns the ip's connected to the new peer
 		if msg == "New peer\n" {
 			IPs := "MyPeers,"
+			counter := 0
 			for _, k := range list.sortedList {
+				if counter > 10 {
+					break
+				}
 				if k == "" {
 					continue
 				}
 				IPs += k + ","
 			}
 			conn.Write([]byte(IPs + "\n"))
-		} else if ips[0] == "MyPeers" {
+		} else if ips[0] == "MyPeers" { //If MyPeers is the first part of the message, it means all the IP's is received, and these are saved in the slice.
 			for _, k := range ips {
+				// list.mux.Lock()
+				// defer list.mux.Unlock()
 				if list.sortedList[0] == k || k == "MyPeers" || k == "\n" {
 					continue
 				} else {
 					list.sortedList = append(list.sortedList, k)
 				}
+
 			}
 
 			//Broadcast precense to all connections
@@ -130,8 +150,9 @@ func Recieve(channels chan string, list *NetworksList, tc chan string, conn net.
 				}
 				go BroadcastPrecense(k, channels, list, tc, localIP)
 			}
-
+			//If the message is NewConnection, this is added to the saved IP's
 		} else if ips[0] == "NewConnection" {
+			list.mux.Lock()
 			list.networkMap[ips[1]] = conn
 			list.sortedList = append(list.sortedList, ips[1])
 
@@ -146,6 +167,7 @@ func Recieve(channels chan string, list *NetworksList, tc chan string, conn net.
 					}
 				}
 			}
+			list.mux.Unlock()
 
 			for _, k := range list.sortedList {
 				fmt.Println("SortedList: " + k)
@@ -161,10 +183,12 @@ func Recieve(channels chan string, list *NetworksList, tc chan string, conn net.
 	}
 }
 
+//Removes a string from a slice
 func remove(s []string, i int) []string {
 	return append(s[:i], s[i+1:]...)
 }
 
+//Broadcasts theip of this program to all saved IP's
 func BroadcastPrecense(connection string, channels chan string, list *NetworksList, tc chan string, localIP string) {
 	conn, err := net.Dial("tcp", connection)
 
@@ -183,12 +207,7 @@ func BroadcastPrecense(connection string, channels chan string, list *NetworksLi
 	conn.Write([]byte(text))
 }
 
-func HandleConnections(InputConn net.Conn, list *NetworksList, channels chan string, tc chan string, localIP string) {
-	defer InputConn.Close()
-
-	Recieve(channels, list, tc, InputConn, localIP)
-}
-
+//Waits for a incoming connection
 func LookForConnection(ln net.Listener, list *NetworksList, channels chan string, tc chan string, localIP string) {
 	defer ln.Close()
 
@@ -207,11 +226,13 @@ func LookForConnection(ln net.Listener, list *NetworksList, channels chan string
 		list.networkMap[InputConn.RemoteAddr().String()] = InputConn
 		list.mux.Unlock()
 
-		go HandleConnections(InputConn, list, channels, tc, localIP)
+		go Recieve(channels, list, tc, InputConn, localIP)
 	}
 }
 
+//Waits for a short while, and then waits for inputs from the user to make a new transaction
 func SendManuallyToConnections(tc chan string) {
+	time.Sleep(10 * time.Second)
 	for {
 		fmt.Println("Choose ID: ")
 		var idInput string

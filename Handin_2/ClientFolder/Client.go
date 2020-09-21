@@ -7,18 +7,19 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 var conn net.Conn
 
 type NetworksList struct {
 	networkMap map[string]net.Conn
-	sortedList [11]IPList
+	sortedList []string
 	mux        sync.Mutex
 }
 
-type MapOfStrings struct {
-	mapOS map[string]bool
+type MapOfTrans struct {
+	mapOT map[string]bool
 	mux   sync.Mutex
 }
 type IPList struct {
@@ -52,21 +53,25 @@ func (l *Ledger) Transaction(t *Transaction) {
 	fmt.Println("Hej fra Transaction funktion")
 }
 
-func TransActionHandler(myledger *Ledger, transchan chan string, broadcast chan string) {
+func TransActionHandler(myledger *Ledger, transchan chan string, broadcast chan string, tmap *MapOfTrans) {
 	for {
 		transactions := <-transchan
-		fmt.Println("modtaget i Transactionshandler: " + transactions)
-		transArray := strings.Split(transactions, ",")
-		if len(transArray) > 2 {
-			newTrans := new(Transaction)
-			newTrans.ID = transArray[0]
-			newTrans.From = transArray[1]
-			newTrans.To = transArray[2]
-			newTrans.Amount, _ = strconv.Atoi(transArray[3])
+		if tmap.mapOT[transactions] == false {
+			fmt.Println("modtaget i Transactionshandler: " + transactions)
+			transArray := strings.Split(transactions, ",")
+			if len(transArray) > 2 {
+				newTrans := new(Transaction)
+				newTrans.ID = transArray[0]
+				newTrans.From = transArray[1]
+				newTrans.To = transArray[2]
+				newTrans.Amount, _ = strconv.Atoi(transArray[3])
 
-			myledger.Transaction(newTrans)
+				myledger.Transaction(newTrans)
 
-			broadcast <- transactions
+				tmap.mapOT[transactions] = true
+
+				broadcast <- transactions
+			}
 		}
 	}
 }
@@ -91,6 +96,10 @@ func Recieve(channels chan string, list *NetworksList, tc chan string, conn net.
 
 		msg, err := bufio.NewReader(conn).ReadString('\n')
 
+		for i := 0; i > len(list.sortedList); i++ {
+			fmt.Println(list.sortedList[i])
+		}
+
 		if err != nil {
 			list.mux.Lock()
 			fmt.Println("Ending session with " + conn.RemoteAddr().String())
@@ -104,21 +113,33 @@ func Recieve(channels chan string, list *NetworksList, tc chan string, conn net.
 		if msg == "IPs incoming\n" {
 			counter++
 		} else if counter > 0 {
-			if len(list.sortedList) < 1 {
-				conn.Write([]byte("Not enough ip's\n"))
-			} else {
-				ips := strings.Split(msg, ",")
-				for i := range ips {
-					list.sortedList[counter].id = i
-					list.sortedList[counter].ip = ips[i]
+			ips := strings.Split(msg, ",")
+			fmt.Println("Modtaget i counter if loop: " + msg)
+			if len(ips) > 1 {
+				fmt.Println("et skridt længere inde")
+				for i := 0; i > len(ips); i++ {
+					if ips[i] == conn.LocalAddr().String() {
+						continue
+					}
+					list.sortedList = append(list.sortedList, ips[i])
+					// list.sortedList[counter].id = i
+					// list.sortedList[counter].ip = ips[i]
+					counter++
 				}
+
+				counter = 0
 			}
 		} else if msg == "New peer\n" {
 			conn.Write([]byte("IPs incoming\n"))
 			IPs := ""
 			for _, k := range list.sortedList {
-				IPs += "," + k.ip
+				if k == "" {
+					continue
+				}
+				IPs += k + ","
 			}
+			time.Sleep(2 * time.Second)
+			conn.Write([]byte(IPs + "\n"))
 		} else {
 			tc <- msg
 		}
@@ -142,25 +163,31 @@ func LookForConnection(ln net.Listener, list *NetworksList, channels chan string
 	defer ln.Close()
 
 	go BroadCast(channels, list)
-
+	counter := 0
 	for {
 		fmt.Println("Listening for connection...")
 		fmt.Print("> ")
 		InputConn, _ := ln.Accept()
 
+		if counter == 0 {
+			list.sortedList = append(list.sortedList, InputConn.LocalAddr().String())
+			//list.sortedList[counter].id = counter
+		}
+
 		fmt.Println("Got a connection...")
 		fmt.Print("> ")
-
+		counter++
 		list.mux.Lock()
-		list.sortedList[1].id = 1
-		list.sortedList[1].ip = InputConn.RemoteAddr().String()
+		list.sortedList = append(list.sortedList, InputConn.RemoteAddr().String())
+		// list.sortedList[counter].ip =
+		list.networkMap[InputConn.RemoteAddr().String()] = InputConn
 		list.mux.Unlock()
 
 		go HandleConnections(InputConn, list, channels, tc)
 	}
 }
 
-func SendManuallyToConnections(tc chan string) {
+func SendManuallyToConnections(tc chan string, tmap *MapOfTrans) {
 	for {
 		fmt.Println("Choose ID: ")
 		var idInput string
@@ -188,8 +215,6 @@ func SendManuallyToConnections(tc chan string) {
 
 		trans := idInput + "," + senderInput + "," + receiver + "," + amount
 
-		fmt.Println("Hej fra Receiver: " + trans)
-
 		tc <- trans
 	}
 
@@ -198,11 +223,11 @@ func SendManuallyToConnections(tc chan string) {
 func main() {
 	list := new(NetworksList)
 	list.networkMap = make(map[string]net.Conn)
-
+	list.sortedList = make([]string, 1)
+	transMap := new(MapOfTrans)
+	transMap.mapOT = make(map[string]bool)
 	broadcastchan := make(chan string)
 	transactionchan := make(chan string)
-	mapOfStrings := new(MapOfStrings)
-	mapOfStrings.mapOS = make(map[string]bool)
 	myLedger := MakeLedger()
 
 	fmt.Println("Write ip-address: ")
@@ -215,7 +240,7 @@ func main() {
 	fmt.Print("> ")
 	fmt.Scan(&portInput)
 
-	go TransActionHandler(myLedger, transactionchan, broadcastchan)
+	go TransActionHandler(myLedger, transactionchan, broadcastchan, transMap)
 
 	var ipPort string
 	ipPort = ipInput + ":" + portInput
@@ -228,7 +253,7 @@ func main() {
 			fmt.Println("Local Ip-Address and port number: " + "127.0.0.1:18081")
 			go LookForConnection(ln, list, broadcastchan, transactionchan)
 
-			SendManuallyToConnections(transactionchan)
+			SendManuallyToConnections(transactionchan, transMap)
 		}
 	}
 
@@ -251,5 +276,5 @@ func main() {
 
 	go Recieve(broadcastchan, list, transactionchan, conn)
 
-	SendManuallyToConnections(transactionchan)
+	SendManuallyToConnections(transactionchan, transMap)
 }
