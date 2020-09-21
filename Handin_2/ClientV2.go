@@ -12,10 +12,9 @@ import (
 var conn net.Conn
 
 type NetworksList struct {
-	networkMap        map[string]net.Conn
-	sortedList        []string
-	sortedListCounter int
-	mux               sync.Mutex
+	networkMap map[string]net.Conn
+	sortedList []string
+	mux        sync.Mutex
 }
 
 type MapOfTrans struct {
@@ -133,16 +132,37 @@ func Recieve(channels chan string, list *NetworksList, tc chan string, conn net.
 			}
 
 		} else if ips[0] == "NewConnection" {
+			list.networkMap[ips[1]] = conn
 			list.sortedList = append(list.sortedList, ips[1])
 
-			for _, k := range list.sortedList {
-				fmt.Println(k)
+			for i, k := range list.sortedList {
+				_, ok := list.networkMap[k]
+				if ok == false {
+					if k == localIP {
+						continue
+					} else {
+						fmt.Println("Was not here: " + ":" + k + ":")
+						list.sortedList = remove(list.sortedList, i)
+					}
+				}
 			}
+
+			for _, k := range list.sortedList {
+				fmt.Println("SortedList: " + k)
+			}
+
+			for i := range list.networkMap {
+				fmt.Println("networkMap: " + i)
+			}
+
 		} else {
 			tc <- msg
 		}
-
 	}
+}
+
+func remove(s []string, i int) []string {
+	return append(s[:i], s[i+1:]...)
 }
 
 func BroadcastPrecense(connection string, channels chan string, list *NetworksList, tc chan string, localIP string) {
@@ -232,7 +252,6 @@ func main() {
 	mapOfTrans := new(MapOfTrans)
 	mapOfTrans.mapOT = make(map[string]bool)
 	myLedger := MakeLedger()
-	list.sortedListCounter = 0
 
 	fmt.Println("Write ip-address: ")
 	var ipInput string
