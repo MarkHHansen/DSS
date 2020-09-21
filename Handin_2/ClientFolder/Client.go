@@ -4,11 +4,9 @@ import (
 	"bufio"
 	"fmt"
 	"net"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 var conn net.Conn
@@ -51,32 +49,36 @@ func (l *Ledger) Transaction(t *Transaction) {
 	defer l.lock.Unlock()
 	l.Accounts[t.From] -= t.Amount
 	l.Accounts[t.To] += t.Amount
+	fmt.Println("Hej fra Transaction funktion")
 }
 
 func TransActionHandler(myledger *Ledger, transchan chan string, broadcast chan string) {
 	for {
 		transactions := <-transchan
-
+		fmt.Println("modtaget i Transactionshandler: " + transactions)
 		transArray := strings.Split(transactions, ",")
-		newTrans := new(Transaction)
-		newTrans.ID = transArray[0]
-		newTrans.From = transArray[1]
-		newTrans.To = transArray[2]
-		newTrans.Amount, _ = strconv.Atoi(transArray[3])
+		if len(transArray) > 2 {
+			newTrans := new(Transaction)
+			newTrans.ID = transArray[0]
+			newTrans.From = transArray[1]
+			newTrans.To = transArray[2]
+			newTrans.Amount, _ = strconv.Atoi(transArray[3])
 
-		myledger.Transaction(newTrans)
+			myledger.Transaction(newTrans)
 
-		broadcast <- transactions
+			broadcast <- transactions
+		}
 	}
 }
 
 func BroadCast(inc chan string, list *NetworksList) {
 	for {
 		msg := <-inc
-
+		fmt.Println(msg)
 		list.mux.Lock()
-		for _, k := range list.networkMap {
-			k.Write([]byte(msg))
+		for i, k := range list.networkMap {
+			fmt.Println(i)
+			k.Write([]byte(msg + "\n"))
 		}
 		list.mux.Unlock()
 	}
@@ -85,6 +87,8 @@ func BroadCast(inc chan string, list *NetworksList) {
 func Recieve(channels chan string, list *NetworksList, tc chan string, conn net.Conn) {
 	counter := 0
 	for {
+		fmt.Println("Hej fra receveiver")
+
 		msg, err := bufio.NewReader(conn).ReadString('\n')
 
 		if err != nil {
@@ -95,18 +99,22 @@ func Recieve(channels chan string, list *NetworksList, tc chan string, conn net.
 			break
 		}
 
-		if msg == "IPs incoming" {
+		fmt.Println("Modtaget besked: " + msg)
+
+		if msg == "IPs incoming\n" {
 			counter++
-		}
-		if counter > 0 {
-			ips := strings.Split(msg, ",")
-			for i := range ips {
-				list.sortedList[counter].id = i + 1
-				list.sortedList[counter].ip = ips[i+1]
+		} else if counter > 0 {
+			if len(list.sortedList) < 1 {
+				conn.Write([]byte("Not enough ip's\n"))
+			} else {
+				ips := strings.Split(msg, ",")
+				for i := range ips {
+					list.sortedList[counter].id = i
+					list.sortedList[counter].ip = ips[i]
+				}
 			}
-		}
-		if msg == "New peer" {
-			conn.Write([]byte("IPs incoming"))
+		} else if msg == "New peer\n" {
+			conn.Write([]byte("IPs incoming\n"))
 			IPs := ""
 			for _, k := range list.sortedList {
 				IPs += "," + k.ip
@@ -121,17 +129,17 @@ func Recieve(channels chan string, list *NetworksList, tc chan string, conn net.
 func HandleConnections(InputConn net.Conn, list *NetworksList, channels chan string, tc chan string) {
 	defer InputConn.Close()
 
-	for i, _ := range list.networkMap {
-		fmt.Println(i)
-		InputConn.Write([]byte(i))
-		time.Sleep(1)
-	}
+	// for i, _ := range list.networkMap {
+	// 	fmt.Println(i)
+	// 	InputConn.Write([]byte(i))
+	// 	time.Sleep(1)
+	// }
 
 	Recieve(channels, list, tc, InputConn)
 }
 
 func LookForConnection(ln net.Listener, list *NetworksList, channels chan string, tc chan string) {
-	//defer ln.Close()
+	defer ln.Close()
 
 	go BroadCast(channels, list)
 
@@ -169,15 +177,18 @@ func SendManuallyToConnections(tc chan string) {
 		fmt.Print("> ")
 		fmt.Scan(&receiver)
 
-		reader := bufio.NewReader(os.Stdin)
-		fmt.Print("Choose amount \n > ")
-		amount, err := reader.ReadString('\n')
+		fmt.Println("Choose amount: ")
+		var amount string
+		fmt.Print("> ")
+		fmt.Scan(&amount)
 
-		if err != nil {
-			return
-		}
+		// reader := bufio.NewReader(os.Stdin)
+		// fmt.Print("Choose amount \n > ")
+		// amount, err := reader.ReadString('\n')
 
 		trans := idInput + "," + senderInput + "," + receiver + "," + amount
+
+		fmt.Println("Hej fra Receiver: " + trans)
 
 		tc <- trans
 	}
@@ -232,7 +243,7 @@ func main() {
 	list.networkMap[conn.RemoteAddr().String()] = conn
 	list.mux.Unlock()
 
-	conn.Write([]byte("New peer"))
+	conn.Write([]byte("New peer\n"))
 
 	ln, _ := net.Listen("tcp", ":"+port)
 
