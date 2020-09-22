@@ -81,12 +81,12 @@ func TransActionHandler(myledger *Ledger, transchan chan string, broadcast chan 
 
 				broadcast <- transactions
 			}
+			fmt.Println("Updated ledgder: ")
+			for i, k := range myledger.Accounts {
+				fmt.Println("Account: " + i + " has balance: " + strconv.Itoa(k))
+			}
 		}
 		maptrans.mux.Unlock()
-		fmt.Println("Updated ledgder: ")
-		for i, k := range myledger.Accounts {
-			fmt.Println("Account: " + i + " has balance: " + strconv.Itoa(k))
-		}
 	}
 }
 
@@ -315,6 +315,7 @@ func main() {
 	go Recieve(broadcastchan, list, transactionchan, conn, LocalIPPort)
 
 	ln, _ := net.Listen("tcp", ":"+port)
+	fmt.Println(ln.Addr())
 
 	list.sortedList = append(list.sortedList, LocalIPPort)
 
