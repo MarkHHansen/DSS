@@ -107,6 +107,9 @@ func BroadCast(inc chan string, list *NetworksList) {
 func Recieve(channels chan string, list *NetworksList, tc chan string, conn net.Conn, localIP string) {
 	for {
 		msg, err := bufio.NewReader(conn).ReadString('\n')
+
+		fmt.Println("Modtaget besked: " + msg)
+
 		//Deletes connection if sessionis ended
 		if err != nil {
 			list.mux.Lock()
@@ -120,21 +123,27 @@ func Recieve(channels chan string, list *NetworksList, tc chan string, conn net.
 		//If a new peer is connected, this returns the ip's connected to the new peer
 		if msg == "New peer\n" {
 			IPs := "MyPeers,"
-			counter := 0
-			for _, k := range list.sortedList {
-				if counter > 10 {
-					break
+			if len(list.sortedList) > 10 {
+				counter := 0
+				for i := len(list.sortedList) - 1; i == len(list.sortedList)-10; i-- {
+					if list.sortedList[i] == "" {
+						continue
+					}
+					IPs += list.sortedList[i] + ","
+					counter++
 				}
-				if k == "" {
-					continue
+			} else {
+				for _, i := range list.sortedList {
+					if i == "" {
+						continue
+					}
+					IPs += i + ","
 				}
-				IPs += k + ","
 			}
 			conn.Write([]byte(IPs + "\n"))
 		} else if ips[0] == "MyPeers" { //If MyPeers is the first part of the message, it means all the IP's is received, and these are saved in the slice.
 			for _, k := range ips {
-				// list.mux.Lock()
-				// defer list.mux.Unlock()
+
 				if list.sortedList[0] == k || k == "MyPeers" || k == "\n" {
 					continue
 				} else {
@@ -290,12 +299,15 @@ func main() {
 	conn, err := net.Dial("tcp", ipPort)
 
 	if err != nil {
-		ln, _ := net.Listen("tcp", ":18081")
+		ln, _ := net.Listen("tcp", ":")
+		tempString := ln.Addr().String()
+		localArr := strings.Split(tempString, ":")
+		localIP := "127.0.0.1:" + localArr[3]
 		defer ln.Close()
 		for {
-			fmt.Println("Local Ip-Address and port number: " + "127.0.0.1:18081")
-			list.sortedList = append(list.sortedList, "127.0.0.1:18081")
-			go LookForConnection(ln, list, broadcastchan, transactionchan, "127.0.0.1:18081")
+			fmt.Println("Local Ip-Address and port number: " + localIP)
+			list.sortedList = append(list.sortedList, localIP)
+			go LookForConnection(ln, list, broadcastchan, transactionchan, localIP)
 
 			SendManuallyToConnections(transactionchan)
 		}
@@ -315,7 +327,6 @@ func main() {
 	go Recieve(broadcastchan, list, transactionchan, conn, LocalIPPort)
 
 	ln, _ := net.Listen("tcp", ":"+port)
-	fmt.Println(ln.Addr())
 
 	list.sortedList = append(list.sortedList, LocalIPPort)
 
