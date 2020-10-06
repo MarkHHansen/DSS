@@ -1,30 +1,11 @@
-package main
+package rsacustom
 
 import (
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
 	"fmt"
 	"math/big"
-	"rsacustom"
 )
-
-func main() {
-	public, private, _ := rsacustom.KeyGen(128)
-	size := big.NewInt(128)
-	msgEncrypt, _ := rand.Int(rand.Reader, size)
-
-	fmt.Print("Plaintext: ")
-	fmt.Println(msgEncrypt)
-
-	c := rsacustom.Sign(private, msgEncrypt)
-	fmt.Print("\nHashed and signed text: ")
-	fmt.Println(c)
-
-	dc := rsacustom.Verify(public, c)
-	fmt.Print("After verify: ")
-	fmt.Println(dc)
-}
 
 // PublicKey consists of N and E of type big.int
 type PublicKey struct {
@@ -39,23 +20,34 @@ type PrivateKey struct {
 }
 
 // Sign signs messages by first hashng them and then signing
-func Sign(privKey *PrivateKey, m *big.Int) *big.Int {
-	hash := sha256.New()
-	hash.Write(m.Bytes())
-	hashed := hash.Sum(nil)
-	rsa.PrivateKey(privKey.D)
-	c := rsa.SignPKCS1v15(rand.Reader, privKey.D)
-	return c
+func Sign(privKey *PrivateKey, m *big.Int) (*big.Int, *big.Int) {
+	hashedMessage := Hash(m)
+	signed := new(big.Int).Exp(hashedMessage, privKey.D, privKey.N)
+	return signed, hashedMessage
 }
 
 // Verify does something
-func Verify(pub *PublicKey, cipher *big.Int) *big.Int {
-	hash := sha256.New()
-	hash.Write(cipher.Bytes())
-	hashed := h.Sum256(nil)
-	c := rsa.VerifyPKCS1v15()
+func Verify(pub *PublicKey, signature *big.Int, hash *big.Int) bool {
+	//hashedMessage := new(big.Int)
+	hashFromSignature := new(big.Int).Exp(signature, pub.E, pub.N)
+	fmt.Println(hash)
+	fmt.Println(hashFromSignature)
 
-	return hashedMessage
+	if hashFromSignature.Cmp(hash) == 0 {
+		fmt.Print(hashFromSignature)
+		fmt.Print(" = ")
+		fmt.Println(hash)
+		fmt.Println("The message is verified")
+		return true
+	} else {
+		fmt.Print(":")
+		fmt.Print(hashFromSignature)
+		fmt.Print(": != :")
+		fmt.Print(hash)
+		fmt.Println(":")
+		fmt.Println("The message is not verified")
+		return false
+	}
 }
 
 // Hash generates a sha256 hash

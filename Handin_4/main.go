@@ -5,35 +5,96 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io/ioutil"
 	"math/big"
 	"rsacustom" // Custom Package
+	"time"
 )
 
 // Main
 func main() {
-	public, private, _ := rsacustom.KeyGen(128)
+	//Testing the hashing of bits pr seconds
+	TestHashBPS()
+
+	//Testing the time of signing with a 2000 bit key
+	TestSignatureTime()
+
+	// fmt.Println("Test for task 1: ")
+	// TestRSA()
+
+	// fmt.Println("Test for task 2: ")
+	// TestAES()
+
+	// TestRSASignatures()
+
+	// //Infinite loop
+	for true {
+
+	}
+}
+
+//TestHashBPS Testes the hashing speed
+func TestHashBPS() {
+	//Reads a file with 10kb = 80.000 bits
+	c, _ := ioutil.ReadFile("bits.txt")
+
+	hashMsg := new(big.Int).SetBytes(c)
+
+	for true {
+		start := time.Now()
+
+		rsacustom.Hash(hashMsg)
+
+		elapsed := time.Since(start)
+
+		elapsedNano := elapsed.Nanoseconds()
+
+		if elapsedNano != 0 {
+			fmt.Print("Time of hashing the 80.000 bit message: ")
+			fmt.Print(elapsedNano)
+			fmt.Println(" ns")
+
+			break
+		}
+	}
+
+}
+
+func TestSignatureTime() {
+	_, private, _ := rsacustom.KeyGen(2000)
+
 	size := big.NewInt(128)
 	msgEncrypt, _ := rand.Int(rand.Reader, size)
 
-	fmt.Print("Plaintext: ")
+	start := time.Now()
+	rsacustom.Sign(private, msgEncrypt)
+	elapsed := time.Since(start)
+
+	fmt.Print("Time of signing with 2000 bit key: ")
+	fmt.Print(elapsed.Nanoseconds())
+	fmt.Println(" ns")
+
+}
+
+//TestRSASignatures makes a random message, hashes and signs it, and then verifies it.
+func TestRSASignatures() {
+	public, private, _ := rsacustom.KeyGen(256)
+
+	size := big.NewInt(128)
+	msgEncrypt, _ := rand.Int(rand.Reader, size)
+	fmt.Print("The generated message: ")
 	fmt.Println(msgEncrypt)
 
-	c := rsacustom.Sign(private, msgEncrypt)
-	fmt.Print("\nHashed and signed text: ")
-	fmt.Println(c)
+	msg, hash := rsacustom.Sign(private, msgEncrypt)
+	fmt.Print("Signed message: ")
+	fmt.Println(msg)
 
-	dc := rsacustom.Verify(public, c)
-	fmt.Print("After verify: ")
-	fmt.Println(dc)
-	//fmt.Println("Test for task 1: ")
-	//TestRSA()
+	//Verify correct message
+	rsacustom.Verify(public, msg, hash)
 
-	//fmt.Println("Test for task 2: ")
-	//TestAES()
-
-	// Infinite loop
-	//for true {
-	//}
+	//Verify incorrect message
+	tamperedMEssage := big.NewInt(88558698261037034)
+	rsacustom.Verify(public, tamperedMEssage, hash)
 }
 
 // TestAES tests EncrypToFile() and EncryptToFile() functions
