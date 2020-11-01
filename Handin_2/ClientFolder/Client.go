@@ -130,14 +130,15 @@ func HandleConnections(InputConn net.Conn, list *NetworksList, channels chan str
 	Recieve(channels, list, tc, InputConn)
 }
 
-func LookForConnection(ln net.Listener, list *NetworksList, channels chan string, tc chan string) {
+func LookForConnection(ln net.Listener, list *NetworksList, broad chan string, tc chan string) {
 	//defer ln.Close()
 
-	go BroadCast(channels, list)
+	go BroadCast(broad, list)
 
 	for {
 		fmt.Println("Listening for connection...")
 		fmt.Print("> ")
+		fmt.Println(ln.Addr().String())
 		InputConn, _ := ln.Accept()
 
 		fmt.Println("Got a connection...")
@@ -148,7 +149,7 @@ func LookForConnection(ln net.Listener, list *NetworksList, channels chan string
 		list.sortedList[1].ip = InputConn.RemoteAddr().String()
 		list.mux.Unlock()
 
-		go HandleConnections(InputConn, list, channels, tc)
+		go HandleConnections(InputConn, list, broad, tc)
 	}
 }
 
@@ -227,14 +228,18 @@ func main() {
 
 	s := strings.Split(LocalIPPort, ":")
 	port := s[1]
-
+	fmt.Println(port)
 	list.mux.Lock()
 	list.networkMap[conn.RemoteAddr().String()] = conn
 	list.mux.Unlock()
 
 	conn.Write([]byte("New peer"))
 
-	ln, _ := net.Listen("tcp", ":"+port)
+	ln, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+
+		fmt.Println("What the fuck, cant listen")
+	}
 
 	go LookForConnection(ln, list, broadcastchan, transactionchan)
 
