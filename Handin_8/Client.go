@@ -92,7 +92,7 @@ func (l *Ledger) Transaction(t *SignedTransaction) {
 }
 
 //TransActionHandler håndterer indkommende strings, og opdaterer ledger med information. Søger for det kun bliver opdateret en gang
-func TransActionHandler(myledger *Ledger, transchan chan string, broadcast chan string, maptrans *MapOfTrans, keypair *KeyPair) {
+func TransActionHandler(myledger *Ledger, transchan chan string, broadcast chan string, sequ chan string, maptrans *MapOfTrans, keypair *KeyPair) {
 	for {
 
 		transactions := <-transchan
@@ -104,6 +104,10 @@ func TransActionHandler(myledger *Ledger, transchan chan string, broadcast chan 
 		//Checks if transaction has already been made, otherwise makes it
 		if maptrans.mapOT[transactions] == false {
 			transArray := strings.Split(transactions, ",")
+			if transArray[0] == "sequence" {
+				sequ <- transArray[1]
+				continue
+			}
 			if len(transArray) > 2 {
 				newTrans := new(SignedTransaction)
 				newTrans.ID = transArray[0]
@@ -286,12 +290,29 @@ func HandleConnection(channels chan string, list *NetworksList, tc chan string, 
 		} else {
 			transActions[counter] = msg
 			counter++
+			if sequenceIPAddress == conn.LocalAddr().String() {
+				Nmsg := "sequence," + msg
+				tc <- Nmsg
+			}
 		}
 	}
 }
 
-func SequenceFunction() {
+func SequenceFunction(sequ chan string, sequenceKeyPair *KeyPair, inc chan string, list *NetworksList) {
+	ids := ""
+	timer := time.NewTimer(time.Second * 10)
+	go BroadCast(inc, list)
 
+	for {
+		id := <-sequ
+		stop := timer.Stop()
+		ids = ids + "," + id
+		if stop {
+			inc <- "Blok" + ids
+			timer.Reset(time.Second * 10)
+			ids = ""
+		}
+	}
 }
 
 //BroadcastPrecense broadcasts theip of this program to all saved IP's
@@ -315,7 +336,7 @@ func BroadcastPrecense(connection string, channels chan string, list *NetworksLi
 
 //LookForConnection waits for a incoming connection
 func LookForConnection(ln net.Listener, list *NetworksList, channels chan string, tc chan string, localIP string, keypair *KeyPair, sequenceKeyPair *KeyPair) {
-	defer ln.Close()
+	//defer ln.Close()
 
 	go BroadCast(channels, list)
 
@@ -386,6 +407,7 @@ func main() {
 
 	broadcastchan := make(chan string)
 	transactionchan := make(chan string)
+	sequencechan := make(chan string)
 	mapOfTrans := new(MapOfTrans)
 	mapOfTrans.mapOT = make(map[string]bool)
 	myLedger := MakeLedger()
@@ -406,7 +428,8 @@ func main() {
 	fmt.Print("> ")
 	fmt.Scan(&portInput)
 
-	go TransActionHandler(myLedger, transactionchan, broadcastchan, mapOfTrans, myKeypair)
+	go TransActionHandler(myLedger, transactionchan, broadcastchan, sequencechan, mapOfTrans, myKeypair)
+	//go SequenceFunction(sequencechan, sequencerKeyPair, broadcastchan, list)
 
 	ipPort := ipInput + ":" + portInput
 	conn, err := net.Dial("tcp", ipPort)
