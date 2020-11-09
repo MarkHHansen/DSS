@@ -305,10 +305,15 @@ func SequenceFunction(sequ chan string, sequenceKeyPair *KeyPair, inc chan strin
 
 	for {
 		id := <-sequ
+		print("Got message in sequence: ")
+		fmt.Println(id)
 		stop := timer.Stop()
 		ids = ids + "," + id
 		if stop {
-			inc <- "Blok" + ids
+			toSignmsg := "Blok" + ids
+			signInt, _ := new(big.Int).SetString(toSignmsg, 10)
+			signedMessage, _ := rsacustom.SignOld(sequenceKeyPair.PrivateKey, signInt)
+			inc <- signedMessage.String()
 			timer.Reset(time.Second * 10)
 			ids = ""
 		}
