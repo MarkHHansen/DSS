@@ -67,7 +67,7 @@ func (l *Ledger) Transaction(t *SignedTransaction, sequenceKeyPair *KeyPair, mes
 	l.lock.Lock()
 	defer l.lock.Unlock()
 
-	//sigArray := strings.Split(t.From, ",")
+	sigArray := strings.Split(t.From, ",")
 	//tempKey := new(rsacustom.PublicKey)
 	//sequenceKeyPair.PublicKey.E, _ = new(big.Int).SetString(sigArray[0], 10)
 	//sequenceKeyPair.PublicKey.N, _ = new(big.Int).SetString(sigArray[1], 10)

@@ -63,29 +63,30 @@ type SignedTransaction struct {
 }
 
 //Transaction verificerer en transaction
-func (l *Ledger) Transaction(t *SignedTransaction, sequenceKeyPair *KeyPair, messageThatsSigned string) {
+func (l *Ledger) Transaction(t *SignedTransaction, sequenceKeyPair *KeyPair) {
 	l.lock.Lock()
 	defer l.lock.Unlock()
 
-	//sigArray := strings.Split(t.From, ",")
-	//tempKey := new(rsacustom.PublicKey)
-	//sequenceKeyPair.PublicKey.E, _ = new(big.Int).SetString(sigArray[0], 10)
-	//sequenceKeyPair.PublicKey.N, _ = new(big.Int).SetString(sigArray[1], 10)
+	sigArray := strings.Split(t.From, ",")
+	tempKey := new(rsacustom.PublicKey)
+	tempKey.E, _ = new(big.Int).SetString(sigArray[0], 10)
+	tempKey.N, _ = new(big.Int).SetString(sigArray[1], 10)
 
 	signature, _ := new(big.Int).SetString(t.Signature, 10)
+	amountStr := strconv.Itoa(t.Amount)
 
 	//amountStr := strconv.Itoa(t.Amount)
-	tempString := t.ID // + t.From + t.To + amountStr
+	tempString := t.ID + t.From + t.To + amountStr
 
 	//Removes unnessecary characters or spaces
 	re, _ := regexp.Compile(`[^\w]`)
 	tempString = re.ReplaceAllString(tempString, "")
 
-	hashingInt, _ := new(big.Int).SetString(messageThatsSigned, 10)
+	hashingInt, _ := new(big.Int).SetString(tempString, 10)
 	hashingTxt := rsacustom.Hash(hashingInt)
 
 	//Uses the verify function from ealiere exercise, to verify the signature
-	validSignature := rsacustom.Verify(sequenceKeyPair.PublicKey, signature, hashingTxt)
+	validSignature := rsacustom.Verify(tempKey, signature, hashingTxt)
 
 	if validSignature == true && t.Amount >= 1 {
 		l.Accounts[t.From] -= t.Amount
@@ -121,11 +122,24 @@ func TransActionHandler(myledger *Ledger, transchan chan string, broadcast chan 
 
 				newTrans.Amount = amount
 
-				newTrans.Signature = transArray[7]
+				keyString := keypair.PublicKey.E.String() + "," + keypair.PublicKey.N.String()
+				//If the key in the transaction is the same as the local key, it will be signed
+				if newTrans.From == keyString {
+					re, _ := regexp.Compile(`[^\w]`)
 
-				messageThatsSigned := transArray[8]
+					str1 := re.ReplaceAllString(transactions, "")
+					signString, _ := new(big.Int).SetString(str1, 10)
 
-				myledger.Transaction(newTrans, sequenceKeyPair, messageThatsSigned)
+					sig, _ := rsacustom.SignOld(keypair.PrivateKey, signString)
+					newTrans.Signature = sig.String()
+
+					transactions = transactions + "," + sig.String()
+
+				} else {
+					newTrans.Signature = transArray[7]
+				}
+
+				myledger.Transaction(newTrans, sequenceKeyPair)
 
 				maptrans.mapOT[transactions] = true
 
@@ -227,19 +241,38 @@ func HandleConnection(channels chan string, list *NetworksList, tc chan string, 
 			tempKey.N, _ = new(big.Int).SetString(ips[2], 10)
 			list.publicKeys[conn.RemoteAddr().String()] = tempKey
 		} else if ips[0] == "Blok" {
-			for i := 3; i < len(ips[1:])+1; i++ {
-				for k := 0; k < transActionQueue.counterBloks; k++ {
-					tempString := ips[i]
-					tempString = strings.TrimSuffix(tempString, "\n")
-					msgArr := strings.Split(transActionQueue.transActions[k], ",")
-					transQueue, _ := strconv.Atoi(msgArr[0])
-					ipsInt, _ := strconv.Atoi(tempString)
-					if ipsInt == transQueue {
-						sequenceMsg := "SequenceOK," + transActionQueue.transActions[k] + "," + ips[1] + "," + ips[2]
-						tc <- sequenceMsg
+
+			//amountStr := strconv.Itoa(t.Amount)
+			tempString := strings.Join(ips[:2], ",")
+
+			//Removes unnessecary characters or spaces
+			re, _ := regexp.Compile(`[^\w]`)
+			tempString = re.ReplaceAllString(tempString, "")
+
+			hashingInt, _ := new(big.Int).SetString(tempString, 10)
+			hashingTxt := rsacustom.Hash(hashingInt)
+
+			signature, _ := new(big.Int).SetString(ips[1], 10)
+			//Uses the verify function from ealiere exercise, to verify the signature
+			validSignature := rsacustom.Verify(sequenceKeyPair.PublicKey, signature, hashingTxt)
+
+			if validSignature == true {
+				for i := 3; i < len(ips[1:])+1; i++ {
+					for k := 0; k < transActionQueue.counterBloks; k++ {
+						tempString := ips[i]
+						tempString = strings.TrimSuffix(tempString, "\n")
+						msgArr := strings.Split(transActionQueue.transActions[k], ",")
+						transQueue, _ := strconv.Atoi(msgArr[0])
+						ipsInt, _ := strconv.Atoi(tempString)
+						if ipsInt == transQueue {
+							sequenceMsg := "SequenceOK," + transActionQueue.transActions[k] + "," + ips[1] + "," + ips[2]
+							tc <- sequenceMsg
+						}
 					}
+					transActionQueue.counterBloks = 0
 				}
-				transActionQueue.counterBloks = 0
+			} else {
+				fmt.Println("Invalid block signature")
 			}
 		} else if ips[5] == "MyPeers" { //If MyPeers is the first part of the message, it means all the IP's is received, and these are saved in the slice.
 			//Saves the keypair from the connection
@@ -308,11 +341,11 @@ func SequenceHandler(sequ chan string, sequenceKeyPair *KeyPair, inc chan string
 			if Expired(timer) {
 				if ids != "" {
 					re, _ := regexp.Compile(`[^\w]`)
-
-					str1 := re.ReplaceAllString(tempString, "") //Removes "SequenceOK" from the string and every ','
+					fmt.Println(ids)
+					str1 := re.ReplaceAllString(ids, "") //Removes "SequenceOK" from the string and every ','
 					signString, _ := new(big.Int).SetString(str1, 10)
 					signedMessage, _ := rsacustom.SignOld(sequenceKeyPair.PrivateKey, signString)
-					sequenceMessage := "Blok," + signedMessage.String() + "," + signString.String() + ids
+					sequenceMessage := "Blok," + signedMessage.String() + "," + ids
 					inc <- sequenceMessage
 
 					ips := strings.Split(sequenceMessage, ",")
@@ -326,7 +359,7 @@ func SequenceHandler(sequ chan string, sequenceKeyPair *KeyPair, inc chan string
 							transQueue, _ := strconv.Atoi(msgArr[0])
 							ipsInt, _ := strconv.Atoi(tempString)
 							if ipsInt == transQueue {
-								sequenceMsg := "SequenceOK," + transActionQueue.transActions[k] + "," + ips[1] + "," + signString.String()
+								sequenceMsg := "SequenceOK," + transActionQueue.transActions[k]
 								tc <- sequenceMsg
 							}
 						}
