@@ -13,7 +13,11 @@ import (
 	"time"
 )
 
-var conn net.Conn
+//TransActionQueue is
+type TransActionQueue struct {
+	counterBloks int
+	transActions []string
+}
 
 //KeyPair is a pair of private and public keys
 type KeyPair struct {
@@ -59,29 +63,29 @@ type SignedTransaction struct {
 }
 
 //Transaction verificerer en transaction
-func (l *Ledger) Transaction(t *SignedTransaction) {
+func (l *Ledger) Transaction(t *SignedTransaction, sequenceKeyPair *KeyPair, messageThatsSigned string) {
 	l.lock.Lock()
 	defer l.lock.Unlock()
 
-	sigArray := strings.Split(t.From, ",")
-	tempKey := new(rsacustom.PublicKey)
-	tempKey.E, _ = new(big.Int).SetString(sigArray[0], 10)
-	tempKey.N, _ = new(big.Int).SetString(sigArray[1], 10)
+	//sigArray := strings.Split(t.From, ",")
+	//tempKey := new(rsacustom.PublicKey)
+	//sequenceKeyPair.PublicKey.E, _ = new(big.Int).SetString(sigArray[0], 10)
+	//sequenceKeyPair.PublicKey.N, _ = new(big.Int).SetString(sigArray[1], 10)
 
 	signature, _ := new(big.Int).SetString(t.Signature, 10)
 
-	amountStr := strconv.Itoa(t.Amount)
-	tempString := t.ID + t.From + t.To + amountStr
+	//amountStr := strconv.Itoa(t.Amount)
+	tempString := t.ID // + t.From + t.To + amountStr
 
 	//Removes unnessecary characters or spaces
 	re, _ := regexp.Compile(`[^\w]`)
 	tempString = re.ReplaceAllString(tempString, "")
 
-	hashingInt, _ := new(big.Int).SetString(tempString, 10)
+	hashingInt, _ := new(big.Int).SetString(messageThatsSigned, 10)
 	hashingTxt := rsacustom.Hash(hashingInt)
 
 	//Uses the verify function from ealiere exercise, to verify the signature
-	validSignature := rsacustom.Verify(tempKey, signature, hashingTxt)
+	validSignature := rsacustom.Verify(sequenceKeyPair.PublicKey, signature, hashingTxt)
 
 	if validSignature == true && t.Amount >= 1 {
 		l.Accounts[t.From] -= t.Amount
@@ -92,10 +96,10 @@ func (l *Ledger) Transaction(t *SignedTransaction) {
 }
 
 //TransActionHandler håndterer indkommende strings, og opdaterer ledger med information. Søger for det kun bliver opdateret en gang
-func TransActionHandler(myledger *Ledger, transchan chan string, broadcast chan string, sequ chan string, maptrans *MapOfTrans, keypair *KeyPair) {
+func TransActionHandler(myledger *Ledger, transchan chan string, broadcast chan string, sequ chan string, maptrans *MapOfTrans, keypair *KeyPair, sequenceKeyPair *KeyPair) {
 	for {
-
 		transactions := <-transchan
+
 		//Removes any unwanted spaces from the incoming message. Without this, the last part of the message, the amount, cannot be parsed to an integer.
 		re := regexp.MustCompile(`\r?\n`)
 		transactions = re.ReplaceAllString(transactions, "")
@@ -105,45 +109,32 @@ func TransActionHandler(myledger *Ledger, transchan chan string, broadcast chan 
 		if maptrans.mapOT[transactions] == false {
 			transArray := strings.Split(transactions, ",")
 			if transArray[0] == "sequence" {
-				sequ <- transArray[1]
-				continue
-			}
-			if len(transArray) > 2 {
+				sequ <- transactions[8:]
+			} else if len(transArray) > 2 && transArray[0] == "SequenceOK" {
 				newTrans := new(SignedTransaction)
-				newTrans.ID = transArray[0]
-				newTrans.From = transArray[1] + "," + transArray[2]
-				newTrans.To = transArray[3] + "," + transArray[4]
-				tempInt := transArray[5]
+				newTrans.ID = transArray[1]
+				newTrans.From = transArray[2] + "," + transArray[3]
+				newTrans.To = transArray[4] + "," + transArray[5]
+				tempInt := transArray[6]
 
 				amount, _ := strconv.Atoi(tempInt)
 
 				newTrans.Amount = amount
 
-				keyString := keypair.PublicKey.E.String() + "," + keypair.PublicKey.N.String()
+				newTrans.Signature = transArray[7]
 
-				//If the key in the transaction is the same as the local key, it will be signed
-				if newTrans.From == keyString {
-					re, _ := regexp.Compile(`[^\w]`)
-					str1 := re.ReplaceAllString(transactions, "")
-					signString, _ := new(big.Int).SetString(str1, 10)
+				messageThatsSigned := transArray[8]
 
-					sig, _ := rsacustom.SignOld(keypair.PrivateKey, signString)
-					newTrans.Signature = sig.String()
-
-					transactions = transactions + "," + sig.String()
-
-				} else {
-					newTrans.Signature = transArray[6]
-				}
-				myledger.Transaction(newTrans)
+				myledger.Transaction(newTrans, sequenceKeyPair, messageThatsSigned)
 
 				maptrans.mapOT[transactions] = true
 
-				broadcast <- transactions
-			}
-			fmt.Println("Updated ledgder: ")
-			for i, k := range myledger.Accounts {
-				fmt.Println("Account: " + i + " has balance: " + strconv.Itoa(k))
+				//broadcast <- transactions
+
+				fmt.Println("Updated ledgder: ")
+				for i, k := range myledger.Accounts {
+					fmt.Println("Account: " + i + " has balance: " + strconv.Itoa(k))
+				}
 			}
 		}
 		maptrans.mux.Unlock()
@@ -163,16 +154,13 @@ func BroadCast(inc chan string, list *NetworksList) {
 }
 
 //HandleConnection waits for input on port, and handles the message
-func HandleConnection(channels chan string, list *NetworksList, tc chan string, conn net.Conn, localIP string, keypair *KeyPair, sequenceKeyPair *KeyPair) {
-	sequencerPubKey := new(rsacustom.PublicKey)
-	sequenceIPAddress := ""
-	transActions := make([]string, 20)
-	counter := 0
+func HandleConnection(channels chan string, list *NetworksList, tc chan string, conn net.Conn, localIP string, keypair *KeyPair, sequenceKeyPair *KeyPair, sequenceIsLocal bool, transActionQueue *TransActionQueue) {
 	for {
 		defer conn.Close()
 		msg, err := bufio.NewReader(conn).ReadString('\n')
-
-		//Deletes connection if sessionis ended
+		ips := strings.Split(msg, ",")
+		fmt.Println("Message received: " + msg)
+		//Deletes connection if session is ended
 		if err != nil {
 			list.mux.Lock()
 			fmt.Println("Ending session with " + conn.RemoteAddr().String())
@@ -180,8 +168,6 @@ func HandleConnection(channels chan string, list *NetworksList, tc chan string, 
 			list.mux.Unlock()
 			break
 		}
-
-		ips := strings.Split(msg, ",")
 
 		//If a new peer is connected, this returns the ip's connected to the new peer
 		if ips[0] == "New peer" {
@@ -219,15 +205,9 @@ func HandleConnection(channels chan string, list *NetworksList, tc chan string, 
 			list.publicKeys[conn.RemoteAddr().String()] = tempKey
 
 			//Sends the public keypair to the new connection and thesequencePubKey and a list of all other connection the client has
-			if sequenceKeyPair != nil {
-				fmt.Println("Sequence: " + sequenceKeyPair.IPAddress + " - " + sequenceKeyPair.PublicKey.E.String() + " - " + sequenceKeyPair.PublicKey.N.String())
-				conn.Write([]byte(keypair.PublicKey.E.String() + "," + keypair.PublicKey.N.String() + "," + sequenceKeyPair.IPAddress + "," + sequenceKeyPair.PublicKey.E.String() + "," + sequenceKeyPair.PublicKey.N.String() + "," + IPs + "\n"))
-			} else {
-				fmt.Println("Sequence2: " + sequenceIPAddress + " - " + sequencerPubKey.E.String() + " - " + sequencerPubKey.N.String())
-				conn.Write([]byte(keypair.PublicKey.E.String() + "," + keypair.PublicKey.N.String() + "," + sequenceIPAddress + "," + sequencerPubKey.E.String() + "," + sequencerPubKey.N.String() + "," + IPs + "\n"))
-			}
-			//If the message is NewConnection, this is added to the saved IP's. Furthermore, the new received key is saved.
-		} else if ips[0] == "NewConnection" {
+			conn.Write([]byte(keypair.PublicKey.E.String() + "," + keypair.PublicKey.N.String() + "," + sequenceKeyPair.IPAddress + "," + sequenceKeyPair.PublicKey.E.String() + "," + sequenceKeyPair.PublicKey.N.String() + "," + IPs + "\n"))
+
+		} else if ips[0] == "NewConnection" { //If the message is NewConnection, this is added to the saved IP's. Furthermore, the new received key is saved.
 			list.mux.Lock()
 			list.networkMap[ips[1]] = conn
 			list.sortedList = append(list.sortedList, ips[1])
@@ -246,6 +226,21 @@ func HandleConnection(channels chan string, list *NetworksList, tc chan string, 
 			tempKey.E, _ = new(big.Int).SetString(ips[1], 10)
 			tempKey.N, _ = new(big.Int).SetString(ips[2], 10)
 			list.publicKeys[conn.RemoteAddr().String()] = tempKey
+		} else if ips[0] == "Blok" {
+			for i := 3; i < len(ips[1:])+1; i++ {
+				for k := 0; k < transActionQueue.counterBloks; k++ {
+					tempString := ips[i]
+					tempString = strings.TrimSuffix(tempString, "\n")
+					msgArr := strings.Split(transActionQueue.transActions[k], ",")
+					transQueue, _ := strconv.Atoi(msgArr[0])
+					ipsInt, _ := strconv.Atoi(tempString)
+					if ipsInt == transQueue {
+						sequenceMsg := "SequenceOK," + transActionQueue.transActions[k] + "," + ips[1] + "," + ips[2]
+						tc <- sequenceMsg
+					}
+				}
+				transActionQueue.counterBloks = 0
+			}
 		} else if ips[5] == "MyPeers" { //If MyPeers is the first part of the message, it means all the IP's is received, and these are saved in the slice.
 			//Saves the keypair from the connection
 			tempKey := new(rsacustom.PublicKey)
@@ -253,16 +248,10 @@ func HandleConnection(channels chan string, list *NetworksList, tc chan string, 
 			tempKey.N, _ = new(big.Int).SetString(ips[1], 10)
 			list.publicKeys[conn.RemoteAddr().String()] = tempKey
 
-			// sequenceIPAddress = ips[2]
-			// sequencerPubKey.E, _ = new(big.Int).SetString(ips[3], 10)
-			// sequencerPubKey.N, _ = new(big.Int).SetString(ips[4], 10)
-
 			sequenceKeyPair.IPAddress = ips[2]
 			sequenceKeyPair.PublicKey = new(rsacustom.PublicKey)
 			sequenceKeyPair.PublicKey.E, _ = new(big.Int).SetString(ips[3], 10)
 			sequenceKeyPair.PublicKey.N, _ = new(big.Int).SetString(ips[4], 10)
-
-			fmt.Println("Sequence: " + sequenceKeyPair.IPAddress + " - " + sequenceKeyPair.PublicKey.E.String() + " - " + sequenceKeyPair.PublicKey.N.String())
 
 			for _, k := range ips[6:] {
 				list.sortedList = append(list.sortedList, k)
@@ -273,24 +262,14 @@ func HandleConnection(channels chan string, list *NetworksList, tc chan string, 
 				if k == "MyPeers" || k == localIP || k == conn.RemoteAddr().String() || k == "\n" || k == "" {
 					continue
 				}
-				go BroadcastPrecense(k, channels, list, tc, localIP, keypair)
+				go BroadcastPrecense(k, channels, list, tc, localIP, keypair, transActionQueue)
 			}
 
-		} else if ips[0] == "Blok" {
-			for m := range ips[1:] {
-				for i := range transActions {
-					msgArr := strings.Split(transActions[i], ",")
-					if string(m) == msgArr[0] {
-
-						tc <- transActions[i]
-					}
-				}
-				counter = 0
-			}
 		} else {
-			transActions[counter] = msg
-			counter++
-			if sequenceIPAddress == conn.LocalAddr().String() {
+			transActionQueue.transActions[transActionQueue.counterBloks] = msg
+			transActionQueue.counterBloks++
+
+			if sequenceIsLocal {
 				Nmsg := "sequence," + msg
 				tc <- Nmsg
 			}
@@ -298,30 +277,72 @@ func HandleConnection(channels chan string, list *NetworksList, tc chan string, 
 	}
 }
 
-func SequenceFunction(sequ chan string, sequenceKeyPair *KeyPair, inc chan string, list *NetworksList) {
+//Expired checks if the timer is done and returns true/false
+func Expired(T *time.Timer) bool {
+	select {
+	case <-T.C:
+		return true
+	default:
+		time.Now()
+		return false
+	}
+}
+
+//SequenceHandler sends a signed block to all listeners on the network
+func SequenceHandler(sequ chan string, sequenceKeyPair *KeyPair, inc chan string, list *NetworksList, transActionQueue *TransActionQueue, tc chan string) {
 	ids := ""
+	tempString := ""
 	timer := time.NewTimer(time.Second * 10)
 	go BroadCast(inc, list)
 
 	for {
-		id := <-sequ
-		print("Got message in sequence: ")
-		fmt.Println(id)
-		stop := timer.Stop()
-		ids = ids + "," + id
-		if stop {
-			toSignmsg := "Blok" + ids
-			signInt, _ := new(big.Int).SetString(toSignmsg, 10)
-			signedMessage, _ := rsacustom.SignOld(sequenceKeyPair.PrivateKey, signInt)
-			inc <- signedMessage.String()
-			timer.Reset(time.Second * 10)
-			ids = ""
+		select {
+		case id, ok := <-sequ:
+			if ok {
+				transArray := strings.Split(id, ",")
+				tempString = tempString + id + ","
+				ids = ids + "," + transArray[1]
+			}
+
+		default:
+			if Expired(timer) {
+				if ids != "" {
+					re, _ := regexp.Compile(`[^\w]`)
+
+					str1 := re.ReplaceAllString(tempString, "") //Removes "SequenceOK" from the string and every ','
+					signString, _ := new(big.Int).SetString(str1, 10)
+					signedMessage, _ := rsacustom.SignOld(sequenceKeyPair.PrivateKey, signString)
+					sequenceMessage := "Blok," + signedMessage.String() + "," + signString.String() + ids
+					inc <- sequenceMessage
+
+					ips := strings.Split(sequenceMessage, ",")
+
+					//handle the message like in the ConnectionHandler
+					for i := 3; i < len(ips[1:])+1; i++ {
+						for k := 0; k < transActionQueue.counterBloks; k++ {
+							tempString := ips[i]
+							tempString = strings.TrimSuffix(tempString, "\n")
+							msgArr := strings.Split(transActionQueue.transActions[k], ",")
+							transQueue, _ := strconv.Atoi(msgArr[0])
+							ipsInt, _ := strconv.Atoi(tempString)
+							if ipsInt == transQueue {
+								sequenceMsg := "SequenceOK," + transActionQueue.transActions[k] + "," + ips[1] + "," + signString.String()
+								tc <- sequenceMsg
+							}
+						}
+						transActionQueue.counterBloks = 0
+					}
+				}
+				timer.Reset(time.Second * 10)
+				ids = ""
+				tempString = ""
+			}
 		}
 	}
 }
 
 //BroadcastPrecense broadcasts theip of this program to all saved IP's
-func BroadcastPrecense(connection string, channels chan string, list *NetworksList, tc chan string, localIP string, keypair *KeyPair) {
+func BroadcastPrecense(connection string, channels chan string, list *NetworksList, tc chan string, localIP string, keypair *KeyPair, transActionQueue *TransActionQueue) {
 	conn, err := net.Dial("tcp", connection)
 
 	if err != nil {
@@ -334,13 +355,13 @@ func BroadcastPrecense(connection string, channels chan string, list *NetworksLi
 	list.networkMap[conn.RemoteAddr().String()] = conn
 	list.mux.Unlock()
 
-	go HandleConnection(channels, list, tc, conn, localIP, keypair, nil)
+	go HandleConnection(channels, list, tc, conn, localIP, keypair, nil, false, transActionQueue)
 
 	conn.Write([]byte(text))
 }
 
 //LookForConnection waits for a incoming connection
-func LookForConnection(ln net.Listener, list *NetworksList, channels chan string, tc chan string, localIP string, keypair *KeyPair, sequenceKeyPair *KeyPair) {
+func LookForConnection(ln net.Listener, list *NetworksList, channels chan string, tc chan string, localIP string, keypair *KeyPair, sequenceKeyPair *KeyPair, sequenceIsLocal bool, transActionQueue *TransActionQueue) {
 	//defer ln.Close()
 
 	go BroadCast(channels, list)
@@ -359,15 +380,15 @@ func LookForConnection(ln net.Listener, list *NetworksList, channels chan string
 
 		list.mux.Unlock()
 
-		go HandleConnection(channels, list, tc, InputConn, localIP, keypair, sequenceKeyPair)
+		go HandleConnection(channels, list, tc, InputConn, localIP, keypair, sequenceKeyPair, sequenceIsLocal, transActionQueue)
 	}
 }
 
 //SendManuallyToConnections waits for a short while, and then waits for inputs from the user to make a new transaction
-func SendManuallyToConnections(tc chan string, pair *KeyPair, ip string, list *NetworksList) {
+func SendManuallyToConnections(tc chan string, pair *KeyPair, ip string, list *NetworksList, transActionQueue *TransActionQueue) {
 	list.publicKeys[ip] = pair.PublicKey
 
-	time.Sleep(5 * time.Second)
+	time.Sleep(2 * time.Second)
 	for {
 		fmt.Println("Choose ID: ")
 		var idInput string
@@ -399,7 +420,18 @@ func SendManuallyToConnections(tc chan string, pair *KeyPair, ip string, list *N
 
 		trans := idInput + "," + sender + "," + receiver + "," + amount
 
-		tc <- trans
+		transActionQueue.transActions[transActionQueue.counterBloks] = trans
+		transActionQueue.counterBloks++
+
+		for i := 1; i < 20; i++ {
+			time.Sleep(time.Millisecond * 150)
+			id := strconv.Itoa(i)
+			trans := id + "," + sender + "," + receiver + "," + amount
+			transActionQueue.transActions[transActionQueue.counterBloks] = trans
+			transActionQueue.counterBloks++
+
+			tc <- trans
+		}
 	}
 
 }
@@ -421,6 +453,12 @@ func main() {
 	myKeypair.PublicKey = pubKey
 	myKeypair.PrivateKey = privKey
 
+	myLedger.Accounts[pubKey.E.String()+","+pubKey.N.String()] = 1000
+
+	transActionQueue := new(TransActionQueue)
+	transActionQueue.transActions = make([]string, 500)
+	transActionQueue.counterBloks = 0
+
 	sequencerKeyPair := new(KeyPair)
 
 	fmt.Println("Write ip-address: ")
@@ -433,8 +471,7 @@ func main() {
 	fmt.Print("> ")
 	fmt.Scan(&portInput)
 
-	go TransActionHandler(myLedger, transactionchan, broadcastchan, sequencechan, mapOfTrans, myKeypair)
-	//go SequenceFunction(sequencechan, sequencerKeyPair, broadcastchan, list)
+	go TransActionHandler(myLedger, transactionchan, broadcastchan, sequencechan, mapOfTrans, myKeypair, sequencerKeyPair)
 
 	ipPort := ipInput + ":" + portInput
 	conn, err := net.Dial("tcp", ipPort)
@@ -450,13 +487,15 @@ func main() {
 		sequencerKeyPair.PrivateKey = sequencerPrivKey
 		sequencerKeyPair.IPAddress = localIP
 
+		go SequenceHandler(sequencechan, sequencerKeyPair, broadcastchan, list, transActionQueue, transactionchan)
+
 		defer ln.Close()
 		for {
 			fmt.Println("Local Ip-Address and port number: " + localIP)
 			list.sortedList = append(list.sortedList, localIP)
-			go LookForConnection(ln, list, broadcastchan, transactionchan, localIP, myKeypair, sequencerKeyPair)
+			go LookForConnection(ln, list, broadcastchan, transactionchan, localIP, myKeypair, sequencerKeyPair, true, transActionQueue)
 
-			SendManuallyToConnections(transactionchan, myKeypair, localIP, list)
+			SendManuallyToConnections(broadcastchan, myKeypair, localIP, list, transActionQueue)
 		}
 	}
 
@@ -471,16 +510,16 @@ func main() {
 	list.networkMap[conn.RemoteAddr().String()] = conn
 	list.mux.Unlock()
 
-	go HandleConnection(broadcastchan, list, transactionchan, conn, LocalIPPort, myKeypair, sequencerKeyPair)
+	go HandleConnection(broadcastchan, list, transactionchan, conn, LocalIPPort, myKeypair, sequencerKeyPair, false, transActionQueue)
 
 	ln, _ := net.Listen("tcp", ":"+port)
 
 	list.sortedList = append(list.sortedList, LocalIPPort)
 
-	go LookForConnection(ln, list, broadcastchan, transactionchan, LocalIPPort, myKeypair, sequencerKeyPair)
+	go LookForConnection(ln, list, broadcastchan, transactionchan, LocalIPPort, myKeypair, sequencerKeyPair, false, transActionQueue)
 
 	//Sends the publickeypair to the new connection
 	conn.Write([]byte("New peer" + "," + myKeypair.PublicKey.E.String() + "," + myKeypair.PublicKey.N.String() + "," + "\n"))
 
-	SendManuallyToConnections(transactionchan, myKeypair, LocalIPPort, list)
+	SendManuallyToConnections(broadcastchan, myKeypair, LocalIPPort, list, transActionQueue)
 }
