@@ -289,6 +289,7 @@ func HandleConnection(channels chan string, list *NetworksList, tc chan string, 
 			list.publicKeys[conn.RemoteAddr().String()] = tempKey
 
 		} else if ips[0] == "BLOCK" {
+			fmt.Println("Kommer ind i block HandleConn")
 			winnerCorrect := false
 			newWinnerBlock := new(Block)
 			newWinnerBlock.name = ips[0]
@@ -421,17 +422,21 @@ func ExpiredTimer(T *time.Timer) bool {
 }
 
 //DrawLottery is a function
-func DrawLottery(seed string, myLedger *Ledger, keypair *KeyPair, hardness *big.Int, blocksTree *Tree, broadcastChan chan string, blockTree *Tree, transactionQueue *TransActionQueue) {
+func DrawLottery(myLedger *Ledger, keypair *KeyPair, blocksTree *Tree, broadcastChan chan string, transactionQueue *TransActionQueue) {
 	timer := time.NewTimer(time.Second * 1)
 	slot := 0
 	for {
 		select {
 		case _, ok := <-blocksTree.readyLottery:
 			if ok == true {
+				fmt.Println("Kommer ind i drawlottery")
 				if ExpiredTimer(timer) {
+					fmt.Println("Timer expired i drawlottery")
 					slot++
 					slotString := strconv.Itoa(slot)
-					hashMsg, _ := new(big.Int).SetString("LOTTERY"+seed+slotString, 10)
+					hashMsg, _ := new(big.Int).SetString("LOTTERY"+blocksTree.seed+slotString, 10)
+					fmt.Println(keypair.PublicKey.E.String())
+					fmt.Println(hashMsg)
 					drawSlot, _ := rsacustom.SignOld(keypair.PrivateKey, hashMsg)
 
 					seedSlot, _ := new(big.Int).SetString("BLOCK"+slotString, 10)
@@ -445,7 +450,8 @@ func DrawLottery(seed string, myLedger *Ledger, keypair *KeyPair, hardness *big.
 					coinAmountBigInt, _ := new(big.Int).SetString(coinAmount, 10)
 
 					multipliedInts := new(big.Int).Mul(hashedTicket, coinAmountBigInt)
-					if multipliedInts.Cmp(hardness) > 0 {
+					if multipliedInts.Cmp(blocksTree.hardness) > 0 {
+						fmt.Println("Jeg har vundet")
 						winnerBlock := new(Block)
 						winnerBlock.name = "BLOCK"
 						winnerBlock.pubKey = keypair.PublicKey
@@ -456,7 +462,7 @@ func DrawLottery(seed string, myLedger *Ledger, keypair *KeyPair, hardness *big.
 						}
 						winnerBlock.amountTrans = strconv.Itoa(transactionQueue.counterBloks)
 
-						prevBlockInt, _ := new(big.Int).SetString(blockTree.blocks[blockTree.blockCounter], 10)
+						prevBlockInt, _ := new(big.Int).SetString(blocksTree.blocks[blocksTree.blockCounter], 10)
 						preblockHash := rsacustom.Hash(prevBlockInt)
 						winnerBlock.prevBlock = preblockHash
 
@@ -568,6 +574,7 @@ func main() {
 	myTree.blocks[0] = "Seed:" + seed
 	myTree.readyLottery = make(chan string)
 	myTree.seed = seed
+	myTree.hardness, _ = new(big.Int).SetString("25", 10)
 
 	fmt.Println("Write ip-address: ")
 	var ipInput string
@@ -583,6 +590,7 @@ func main() {
 	transActionQueue.transActions = make([]string, 500)
 	transActionQueue.counterBloks = 0
 
+	go DrawLottery(myLedger, myKeypair, myTree, broadcastchan, transActionQueue)
 	go TransActionHandler(myLedger, transactionchan, broadcastchan, mapOfTrans, myKeypair)
 
 	ipPort := ipInput + ":" + portInput
