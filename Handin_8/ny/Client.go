@@ -296,6 +296,7 @@ func SequenceFunction(sequ chan string, sequenceKeyPair *KeyPair, inc chan strin
 
 	for {
 		id := <-sequ
+		
 		print("Got message in sequence: ")
 		fmt.Println(id)
 		stop := timer.Stop()

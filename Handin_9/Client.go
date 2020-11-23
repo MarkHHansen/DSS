@@ -178,13 +178,17 @@ func BroadCast(inc chan string, list *NetworksList) {
 }
 
 //HandleConnection waits for input on port, and handles the message
-func HandleConnection(channels chan string, list *NetworksList, tc chan string, conn net.Conn, localIP string, keypair *KeyPair, blockTree *Tree, transActionsQueue *TransActionQueue) {
+func HandleConnection(channels chan string, list *NetworksList, tc chan string, conn net.Conn, localIP string, keypair *KeyPair, blockTree *Tree, transActionsQueue *TransActionQueue, myLedger *Ledger) {
 	for {
 		defer conn.Close()
 		msg, err := bufio.NewReader(conn).ReadString('\n')
 
 		print("Message received: ")
 		fmt.Println(msg)
+
+		print("My coins: ")
+		fmt.Println(myLedger.Accounts[keypair.PublicKey.E.String()+","+keypair.PublicKey.N.String()])
+
 		//Deletes connection if sessionis ended
 		if err != nil {
 			list.mux.Lock()
@@ -229,15 +233,13 @@ func HandleConnection(channels chan string, list *NetworksList, tc chan string, 
 
 			tempKey.N = n
 
-			if len(list.publicKeys) < 2 {
-				if len(list.publicKeys) == 1 {
-					tc <- "Genesis," + keypair.PublicKey.E.String() + "," + keypair.PublicKey.N.String()
-
-				}
-				tc <- "Genesis," + ips[1] + "," + ips[2]
-				blockTree.blocks[0] += "," + ips[1] + ":" + ips[2] + ":1000000" + ","
-			} else {
-
+			if len(list.publicKeys) == 1 {
+				tc <- "Genesis," + keypair.PublicKey.E.String() + "," + keypair.PublicKey.N.String()
+			}
+			tc <- "Genesis," + ips[1] + "," + ips[2]
+			blockTree.blocks[0] += "," + ips[1] + ":" + ips[2] + ":1000000" + ","
+			if len(list.publicKeys) >= 2 {
+				fmt.Println("Er True")
 				blockTree.readyLottery <- true
 			}
 
@@ -250,6 +252,17 @@ func HandleConnection(channels chan string, list *NetworksList, tc chan string, 
 			tempKey := new(rsacustom.PublicKey)
 			tempKey.E, _ = new(big.Int).SetString(ips[0], 10)
 			tempKey.N, _ = new(big.Int).SetString(ips[1], 10)
+
+			if len(list.publicKeys) == 1 {
+				tc <- "Genesis," + keypair.PublicKey.E.String() + "," + keypair.PublicKey.N.String()
+			}
+			tc <- "Genesis," + ips[0] + "," + ips[1]
+			blockTree.blocks[0] += "," + ips[0] + ":" + ips[1] + ":1000000" + ","
+			if len(list.publicKeys) >= 2 {
+				fmt.Println("Er True")
+				blockTree.readyLottery <- true
+			}
+
 			list.publicKeys[conn.RemoteAddr().String()] = tempKey
 
 			for _, k := range ips[3:] {
@@ -261,7 +274,7 @@ func HandleConnection(channels chan string, list *NetworksList, tc chan string, 
 				if k == "MyPeers" || k == localIP || k == conn.RemoteAddr().String() || k == "\n" || k == "" {
 					continue
 				}
-				go BroadcastPrecense(k, channels, list, tc, localIP, keypair, blockTree, transActionsQueue)
+				go BroadcastPrecense(k, channels, list, tc, localIP, keypair, blockTree, transActionsQueue, myLedger)
 			}
 
 			//If the message is NewConnection, this is added to the saved IP's. Furthermore, the new received key is saved.
@@ -274,7 +287,18 @@ func HandleConnection(channels chan string, list *NetworksList, tc chan string, 
 			tempKey.E, _ = new(big.Int).SetString(ips[2], 10)
 			tempKey.N, _ = new(big.Int).SetString(ips[3], 10)
 
+			if len(list.publicKeys) == 1 {
+				tc <- "Genesis," + keypair.PublicKey.E.String() + "," + keypair.PublicKey.N.String()
+			}
+			tc <- "Genesis," + ips[2] + "," + ips[3]
+			blockTree.blocks[0] += "," + ips[2] + ":" + ips[3] + ":1000000" + ","
+			if len(list.publicKeys) >= 2 {
+				fmt.Println("Er True")
+				blockTree.readyLottery <- true
+			}
+
 			list.publicKeys[ips[1]] = tempKey
+
 			list.mux.Unlock()
 			conn.Write([]byte("NewKey" + "," + keypair.PublicKey.E.String() + "," + keypair.PublicKey.N.String() + "," + "\n"))
 
@@ -282,6 +306,15 @@ func HandleConnection(channels chan string, list *NetworksList, tc chan string, 
 			tempKey := new(rsacustom.PublicKey)
 			tempKey.E, _ = new(big.Int).SetString(ips[1], 10)
 			tempKey.N, _ = new(big.Int).SetString(ips[2], 10)
+
+			if len(list.publicKeys) == 1 {
+				tc <- "Genesis," + keypair.PublicKey.E.String() + "," + keypair.PublicKey.N.String()
+			}
+			tc <- "Genesis," + ips[1] + "," + ips[2]
+			blockTree.blocks[0] += "," + ips[1] + ":" + ips[2] + ":1000000" + ","
+			if len(list.publicKeys) >= 2 {
+				blockTree.readyLottery <- true
+			}
 
 			list.publicKeys[conn.RemoteAddr().String()] = tempKey
 
@@ -314,9 +347,9 @@ func HandleConnection(channels chan string, list *NetworksList, tc chan string, 
 				signing := re.ReplaceAllString(ips[amountIndex+7], "")
 				newWinnerBlock.signing, _ = new(big.Int).SetString(signing, 10)
 			} else {
-				newWinnerBlock.prevBlock, _ = new(big.Int).SetString(ips[amountIndex+7], 10)
+				newWinnerBlock.prevBlock, _ = new(big.Int).SetString(ips[amountIndex+6+amountIndex], 10)
 				re := regexp.MustCompile(`\r?\n`)
-				signing := re.ReplaceAllString(ips[amountIndex+8], "")
+				signing := re.ReplaceAllString(ips[amountIndex+7+amountIndex], "")
 				newWinnerBlock.signing, _ = new(big.Int).SetString(signing, 10)
 				newWinnerBlock.transactions = "0"
 			}
@@ -337,7 +370,12 @@ func HandleConnection(channels chan string, list *NetworksList, tc chan string, 
 			totalSummed := new(big.Int).Add(seedSlotPubKey, newWinnerBlock.Draw)
 			hashedTicket := rsacustom.Hash(totalSummed)
 
-			if hashedTicket.Cmp(blockTree.hardness) <= 0 {
+			coins := myLedger.Accounts[newWinnerBlock.pubKey.E.String()+","+newWinnerBlock.pubKey.N.String()]
+			coinStr := strconv.Itoa(coins)
+			coninsInt, _ := new(big.Int).SetString(coinStr, 10)
+			hashedWithCoins := new(big.Int).Mul(hashedTicket, coninsInt)
+
+			if hashedWithCoins.Cmp(blockTree.hardness) <= 0 {
 				fmt.Println("Winner not approved")
 				winnerCorrect = false
 				continue
@@ -357,6 +395,8 @@ func HandleConnection(channels chan string, list *NetworksList, tc chan string, 
 				continue
 			}
 
+			myLedger.Accounts[newWinnerBlock.pubKey.E.String()+","+newWinnerBlock.pubKey.N.String()] += 10 + aomuntInt
+
 			for i := 6; i < amountIndex; i += 7 {
 				myTrans := ips[i] + "," + ips[i+1] + "," + ips[i+2] + "," + ips[i+3] + "," + ips[i+4] + "," + ips[i+5] + "," + ips[i+6]
 				tc <- myTrans
@@ -375,7 +415,7 @@ func remove(s []string, i int) []string {
 }
 
 //BroadcastPrecense broadcasts theip of this program to all saved IP's
-func BroadcastPrecense(connection string, channels chan string, list *NetworksList, tc chan string, localIP string, keypair *KeyPair, myTree *Tree, transActionsQueue *TransActionQueue) {
+func BroadcastPrecense(connection string, channels chan string, list *NetworksList, tc chan string, localIP string, keypair *KeyPair, myTree *Tree, transActionsQueue *TransActionQueue, myLedger *Ledger) {
 	conn, err := net.Dial("tcp", connection)
 
 	if err != nil {
@@ -388,13 +428,13 @@ func BroadcastPrecense(connection string, channels chan string, list *NetworksLi
 	list.networkMap[conn.RemoteAddr().String()] = conn
 	list.mux.Unlock()
 
-	go HandleConnection(channels, list, tc, conn, localIP, keypair, myTree, transActionsQueue)
+	go HandleConnection(channels, list, tc, conn, localIP, keypair, myTree, transActionsQueue, myLedger)
 
 	conn.Write([]byte(text))
 }
 
 //LookForConnection waits for a incoming connection
-func LookForConnection(ln net.Listener, list *NetworksList, channels chan string, tc chan string, localIP string, keypair *KeyPair, myTree *Tree, transActionsQueue *TransActionQueue) {
+func LookForConnection(ln net.Listener, list *NetworksList, channels chan string, tc chan string, localIP string, keypair *KeyPair, myTree *Tree, transActionsQueue *TransActionQueue, myLedger *Ledger) {
 	defer ln.Close()
 
 	go BroadCast(channels, list)
@@ -413,7 +453,7 @@ func LookForConnection(ln net.Listener, list *NetworksList, channels chan string
 
 		list.mux.Unlock()
 
-		go HandleConnection(channels, list, tc, InputConn, localIP, keypair, myTree, transActionsQueue)
+		go HandleConnection(channels, list, tc, InputConn, localIP, keypair, myTree, transActionsQueue, myLedger)
 	}
 }
 
@@ -464,7 +504,8 @@ func DrawLottery(myLedger *Ledger, keypair *KeyPair, blocksTree *Tree, broadcast
 					coinAmountBigInt, _ := new(big.Int).SetString(coinAmount, 10)
 
 					multipliedInts := new(big.Int).Mul(hashedTicket, coinAmountBigInt)
-
+					print("Difference: ")
+					fmt.Println(new(big.Int).Sub(blocksTree.hardness, multipliedInts))
 					if multipliedInts.Cmp(blocksTree.hardness) > 0 {
 						fmt.Println("Jeg har vundet")
 						winnerBlock := new(Block)
@@ -478,17 +519,22 @@ func DrawLottery(myLedger *Ledger, keypair *KeyPair, blocksTree *Tree, broadcast
 							transChan <- transactionQueue.transActions[i]
 						}
 
+						transactionQueue.counterBloks = 0
+
 						winnerBlock.amountTrans = strconv.Itoa(transactionQueue.counterBloks)
 
 						prevBlock := blocksTree.blocks[blocksTree.blockCounter]
 						prevBlock = strings.Replace(prevBlock, ",", "", -1)
 						prevBlock = strings.Replace(prevBlock, ":", "", -1)
 
+						print("Previous block: ")
+						fmt.Println(prevBlock)
+
 						prevBlockInt, _ := new(big.Int).SetString(prevBlock, 10)
 						preblockHash := rsacustom.Hash(prevBlockInt)
 						winnerBlock.prevBlock = preblockHash
 
-						go WinnerBroadcast(winnerBlock, broadcastChan, keypair)
+						go WinnerBroadcast(winnerBlock, broadcastChan, keypair, myLedger)
 					}
 
 				}
@@ -501,7 +547,7 @@ func DrawLottery(myLedger *Ledger, keypair *KeyPair, blocksTree *Tree, broadcast
 }
 
 //WinnerBroadcast formats the information from the winner block, and broadcasts this.
-func WinnerBroadcast(winnerblock *Block, broadcastChan chan string, keypair *KeyPair) {
+func WinnerBroadcast(winnerblock *Block, broadcastChan chan string, keypair *KeyPair, myLedger *Ledger) {
 	SlotInt, _ := new(big.Int).SetString(winnerblock.slot, 10)
 
 	orgTransactions := winnerblock.transactions
@@ -514,12 +560,15 @@ func WinnerBroadcast(winnerblock *Block, broadcastChan chan string, keypair *Key
 	if transactionsInt == nil || transactions == "" {
 		transactionsInt, _ = new(big.Int).SetString("0", 10)
 
-		transactions = "0"
+		orgTransactions = "0"
 	}
 	nameSlotTransInt := new(big.Int).Add(SlotInt, transactionsInt)
 	fullInt := new(big.Int).Add(nameSlotTransInt, winnerblock.prevBlock)
 
 	sigma, _ := rsacustom.SignOld(keypair.PrivateKey, fullInt)
+
+	amount, _ := strconv.Atoi(winnerblock.amountTrans)
+	myLedger.Accounts[keypair.PublicKey.E.String()+","+keypair.PublicKey.N.String()] += 10 + amount
 
 	MessageToBroadcast := winnerblock.name + "," + winnerblock.pubKey.E.String() + "," + winnerblock.pubKey.N.String() + "," + winnerblock.slot + "," + winnerblock.Draw.String() + "," + winnerblock.amountTrans + "," + orgTransactions + "," + winnerblock.prevBlock.String() + "," + sigma.String()
 	broadcastChan <- MessageToBroadcast
@@ -606,7 +655,7 @@ func main() {
 	myTree.blocks[0] = seed
 	myTree.readyLottery = make(chan bool)
 	myTree.seed = seed
-	myTree.hardness, _ = new(big.Int).SetString("1000000", 10)
+	myTree.hardness = new(big.Int).Exp(big.NewInt(10), big.NewInt(83), nil)
 
 	fmt.Println("Write ip-address: ")
 	var ipInput string
@@ -637,7 +686,7 @@ func main() {
 		for {
 			fmt.Println("Local Ip-Address and port number: " + localIP)
 			list.sortedList = append(list.sortedList, localIP)
-			go LookForConnection(ln, list, broadcastchan, transactionchan, localIP, myKeypair, myTree, transActionQueue)
+			go LookForConnection(ln, list, broadcastchan, transactionchan, localIP, myKeypair, myTree, transActionQueue, myLedger)
 
 			SendManuallyToConnections(broadcastchan, myKeypair, localIP, list, transActionQueue)
 		}
@@ -654,13 +703,13 @@ func main() {
 	list.networkMap[conn.RemoteAddr().String()] = conn
 	list.mux.Unlock()
 
-	go HandleConnection(broadcastchan, list, transactionchan, conn, LocalIPPort, myKeypair, myTree, transActionQueue)
+	go HandleConnection(broadcastchan, list, transactionchan, conn, LocalIPPort, myKeypair, myTree, transActionQueue, myLedger)
 
 	ln, _ := net.Listen("tcp", ":"+port)
 
 	list.sortedList = append(list.sortedList, LocalIPPort)
 
-	go LookForConnection(ln, list, broadcastchan, transactionchan, LocalIPPort, myKeypair, myTree, transActionQueue)
+	go LookForConnection(ln, list, broadcastchan, transactionchan, LocalIPPort, myKeypair, myTree, transActionQueue, myLedger)
 
 	conn.Write([]byte("New peer" + "," + myKeypair.PublicKey.E.String() + "," + myKeypair.PublicKey.N.String() + "," + "\n"))
 

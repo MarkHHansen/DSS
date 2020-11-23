@@ -345,7 +345,6 @@ func SequenceHandler(sequ chan string, sequenceKeyPair *KeyPair, inc chan string
 
 		default:
 			if Expired(timer) {
-				fmt.Println("Timer expired")
 				if ids != "" {
 					re, _ := regexp.Compile(`[^\w]`)
 					fmt.Println(ids)
